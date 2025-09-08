@@ -1,0 +1,308 @@
+﻿@page "/"
+@using EgovXml2Pdf.Services
+@using EgovXml2Pdf.Models
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Text.Json
+@inject IFileProcessingService FileProcessingService
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
+
+<PageTitle>e-Gov電子公文書 HTML変換ツール</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="text-center mb-4">
+                <i class="fas fa-file-code text-primary"></i>
+                e-Gov電子公文書 HTML変換ツール
+            </h1>
+            <p class="text-center text-muted mb-5">
+                電子公文書をドラッグ&ドロップまたはファイル選択でアップロードし、HTMLに変換します
+            </p>
+        </div>
+    </div>
+
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <!-- ファイルドロップエリア -->
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <div class="drop-zone @(isDragOver ? "drag-over" : "")" 
+                         @ref="dropZone"
+                         @ondragover="HandleDragOver" 
+                         @ondragleave="HandleDragLeave" 
+                         @ondrop="HandleDrop">
+                        <div class="text-center py-5">
+                            <i class="fas fa-cloud-upload-alt fa-3x text-primary mb-3"></i>
+                            <h4>電子公文書ファイルをここにドラッグ&ドロップ</h4>
+                            <p class="text-muted">または</p>
+                            <div class="mt-3">
+                                <InputFile OnChange="HandleFileSelect" multiple accept=".zip" class="form-control" />
+                                <small class="text-muted">ZIPファイルを選択してください</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 選択されたファイル一覧 -->
+            @if (selectedFiles.Any())
+            {
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">
+                            <i class="fas fa-list me-2"></i>選択されたファイル (@selectedFiles.Count 件)
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="list-group">
+                            @foreach (var file in selectedFiles)
+                            {
+                                <div class="list-group-item d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="fas fa-file-archive text-warning me-2"></i>
+                                        <strong>@file.Name</strong>
+                                        <small class="text-muted ms-2">(@FormatFileSize(file.Size))</small>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveFile(file)">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <!-- 処理ボタン -->
+            @if (selectedFiles.Any())
+            {
+                <div class="text-center mt-4">
+                    <button class="btn btn-success btn-lg px-5" @onclick="StartProcessing" 
+                            disabled="@isProcessing">
+                        @if (isProcessing)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        }
+                        else
+                        {
+                            <i class="fas fa-play me-2"></i>
+                        }
+                        @(isProcessing ? "処理中..." : "変換開始")
+                    </button>
+                </div>
+            }
+
+            <!-- プログレスバー -->
+            @if (isProcessing)
+            {
+                <div class="card mt-4">
+                    <div class="card-body">
+                        <h6 class="card-title">
+                            <i class="fas fa-cogs me-2"></i>処理状況
+                        </h6>
+                        <div class="progress mb-2">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" 
+                                 style="width: @(progressPercentage)%" 
+                                 aria-valuenow="@progressPercentage" 
+                                 aria-valuemin="0" 
+                                 aria-valuemax="100">
+                                @progressPercentage%
+                            </div>
+                        </div>
+                        <small class="text-muted">@currentStatus</small>
+                    </div>
+                </div>
+            }
+
+            <!-- 結果表示 -->
+            @if (!string.IsNullOrEmpty(resultMessage))
+            {
+                <div class="alert @(isSuccess ? "alert-success" : "alert-danger") mt-4" role="alert">
+                    <i class="fas @(isSuccess ? "fa-check-circle" : "fa-exclamation-triangle") me-2"></i>
+                    @resultMessage
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private ElementReference dropZone;
+    private List<IBrowserFile> selectedFiles = new();
+    private bool isDragOver = false;
+    private bool isProcessing = false;
+    private bool isSuccess = false;
+    private int progressPercentage = 0;
+    private string currentStatus = "";
+    private string resultMessage = "";
+    private DotNetObjectReference<Home>? dotNetHelper;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetHelper = DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("setupDragAndDrop", dropZone, dotNetHelper);
+        }
+    }
+
+    private void HandleDragOver(DragEventArgs e)
+    {
+        isDragOver = true;
+        StateHasChanged();
+    }
+
+    private void HandleDragLeave(DragEventArgs e)
+    {
+        isDragOver = false;
+        StateHasChanged();
+    }
+
+    private void HandleDrop(DragEventArgs e)
+    {
+        isDragOver = false;
+        StateHasChanged();
+        
+        // ドラッグ&ドロップはJavaScriptで処理されます
+    }
+
+    [JSInvokable]
+    public async Task OnFilesDropped(object[] files)
+    {
+        try
+        {
+            selectedFiles.Clear();
+            
+            foreach (var fileObj in files)
+            {
+                // JavaScriptから渡されたファイルデータを処理
+                var jsonString = fileObj.ToString();
+                if (string.IsNullOrEmpty(jsonString))
+                    continue;
+                    
+                var fileData = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(jsonString);
+                if (fileData == null)
+                    continue;
+                    
+                var fileName = fileData.GetValueOrDefault("name")?.ToString() ?? "unknown.zip";
+                var fileSizeObj = fileData.GetValueOrDefault("size");
+                var base64Data = fileData.GetValueOrDefault("base64")?.ToString();
+                
+                if (string.IsNullOrEmpty(base64Data))
+                    continue;
+                
+                // ファイルサイズの安全な変換
+                long fileSize = 0;
+                if (fileSizeObj != null)
+                {
+                    long.TryParse(fileSizeObj.ToString(), out fileSize);
+                }
+                
+                // Base64データからIBrowserFileを作成
+                var droppedFile = new DroppedBrowserFile(fileName, fileSize, base64Data);
+                selectedFiles.Add(droppedFile);
+            }
+            
+            resultMessage = $"ドラッグ&ドロップで {selectedFiles.Count} 個のファイルが追加されました。";
+            isSuccess = true;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            resultMessage = $"ドラッグ&ドロップエラー: {ex.Message}";
+            isSuccess = false;
+            StateHasChanged();
+        }
+    }
+
+
+    private void HandleFileSelect(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            selectedFiles.Clear();
+            
+            foreach (var file in e.GetMultipleFiles())
+            {
+                if (file.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    selectedFiles.Add(file);
+                }
+            }
+            
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            resultMessage = $"ファイル選択エラー: {ex.Message}";
+            isSuccess = false;
+            StateHasChanged();
+        }
+    }
+
+
+    private void RemoveFile(IBrowserFile file)
+    {
+        selectedFiles.Remove(file);
+        StateHasChanged();
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+
+    private async Task StartProcessing()
+    {
+        if (!selectedFiles.Any()) return;
+
+        isProcessing = true;
+        isSuccess = false;
+        resultMessage = "";
+        progressPercentage = 0;
+        currentStatus = "処理を開始しています...";
+
+        try
+        {
+            await FileProcessingService.ProcessFilesAsync(selectedFiles, 
+                (progress, status) => {
+                    progressPercentage = progress;
+                    currentStatus = status;
+                    StateHasChanged();
+                });
+
+            isSuccess = true;
+            resultMessage = "PDF変換が完了しました。ファイルをダウンロードしてください。";
+            progressPercentage = 100;
+            currentStatus = "完了";
+        }
+        catch (Exception ex)
+        {
+            isSuccess = false;
+            resultMessage = $"エラーが発生しました: {ex.Message}";
+        }
+        finally
+        {
+            isProcessing = false;
+            StateHasChanged();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (dotNetHelper != null)
+        {
+            dotNetHelper.Dispose();
+        }
+    }
+}

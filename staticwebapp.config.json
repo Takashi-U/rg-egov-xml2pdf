@@ -1,0 +1,24 @@
+{
+  "routes": [
+    {
+      "route": "/*",
+      "serve": "/index.html",
+      "statusCode": 200
+    }
+  ],
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/images/*.{png,jpg,jpeg,gif,svg}", "/css/*", "/js/*", "/_framework/*"]
+  },
+  "mimeTypes": {
+    ".blat": "application/octet-stream",
+    ".dll": "application/octet-stream",
+    ".json": "application/json",
+    ".wasm": "application/wasm",
+    ".woff": "application/font-woff",
+    ".woff2": "application/font-woff2"
+  },
+  "globalHeaders": {
+    "Cache-Control": "no-cache"
+  }
+}
